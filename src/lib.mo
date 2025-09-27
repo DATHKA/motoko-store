@@ -58,6 +58,12 @@ module {
   /// Comparator function signature used by store operations to order keys.
   public type Compare<K> = (K, K) -> Order.Order;
 
+  /// Sorting direction used by helpers that support custom ordering.
+  public type SortOrder = {
+    #ascending;
+    #descending;
+  };
+
   /// Internal structure representing key sets for an index.
   /// ```motoko
   /// let idx = newEmptyIndex<Text>();
@@ -300,6 +306,20 @@ module {
     let endExclusive = Nat.min(size, offset + limit);
     let length = safeSub(endExclusive, offset);
     Array.tabulate<T>(length, func i = items[offset + i]);
+  };
+
+  /// Returns a new array with items in reverse order.
+  func reverseArray<T>(items : [T]) : [T] {
+    let size = items.size();
+    Array.tabulate<T>(size, func i = items[size - 1 - i]);
+  };
+
+  /// Applies the requested sort order to an array of items.
+  func applySortOrder<T>(items : [T], order : SortOrder) : [T] {
+    switch (order) {
+      case (#ascending) { items };
+      case (#descending) { reverseArray(items) };
+    }
   };
 
   /// Creates a new store with no records and no indexes.
@@ -582,6 +602,18 @@ module {
     };
   };
 
+  /// Returns keys for an index value ordered according to `order`.
+  /// ```motoko
+  /// let keys = Store.keysByOrder(store, "index_status", "active", #descending);
+  /// // keys == #ok(["acct-3", "acct-1"])
+  /// ```
+  public func keysByOrder<K, V>(store : Store<K, V>, indexName : IndexName, indexValue : Text, order : SortOrder) : Result.Result<[K], StoreError> {
+    switch (keysBy(store, indexName, indexValue)) {
+      case (#err e) { #err e };
+      case (#ok keysAtIndex) { #ok(applySortOrder(keysAtIndex, order)) };
+    }
+  };
+
   /// Returns values found under a specific index value. The helper rehydrates each key and
   /// reports `#err(#notFound)` if a key set contains stale keys.
   /// ```motoko
@@ -662,6 +694,25 @@ module {
     };
   };
 
+  /// Returns a slice of keys for an index value after applying the desired order.
+  /// ```motoko
+  /// let page = Store.pageKeysByOrder(store, "index_status", "active", #descending, 0, 2);
+  /// // page == #ok(["acct-3", "acct-1"])
+  /// ```
+  public func pageKeysByOrder<K, V>(
+    store : Store<K, V>,
+    indexName : IndexName,
+    indexValue : Text,
+    order : SortOrder,
+    offset : Nat,
+    limit : Nat
+  ) : Result.Result<[K], StoreError> {
+    switch (keysByOrder(store, indexName, indexValue, order)) {
+      case (#err e) { #err e };
+      case (#ok orderedKeys) { #ok(paginateArray(orderedKeys, offset, limit)) };
+    };
+  };
+
   /// Returns a slice of values for an index value using zero-based pagination.
   /// `offset` skips the given number of matches, `limit` caps how many values are returned.
   /// The helper aborts with `#err(#notFound)` if any key-set entry fails to resolve.
@@ -690,6 +741,79 @@ module {
         #ok(List.toArray(collected))
       };
     };
+  };
+
+  func sortKeysByProjection<K, V, A>(
+    store : Store<K, V>,
+    compareKey : Compare<K>,
+    keys : [K],
+    order : SortOrder,
+    projector : (K, V) -> A,
+    compareProjection : Compare<A>
+  ) : Result.Result<[K], StoreError> {
+    let decoratedList = List.empty<(K, A)>();
+    for (key in keys.vals()) {
+      switch (Map.get(store.records, compareKey, key)) {
+        case null { return #err(#notFound) };
+        case (?value) {
+          List.add(decoratedList, (key, projector(key, value)));
+        };
+      };
+    };
+    let decorated = Array.sort<(K, A)>(
+      List.toArray(decoratedList),
+      func (left, right) {
+        switch (compareProjection(left.1, right.1)) {
+          case (#equal) { compareKey(left.0, right.0) };
+          case orderResult { orderResult };
+        }
+      }
+    );
+    let sortedKeys = Array.tabulate<K>(decorated.size(), func i = decorated[i].0);
+    #ok(applySortOrder(sortedKeys, order));
+  };
+
+  /// Returns keys underneath an index sorted by a projection of their values.
+  /// Ties fall back to the key comparator.
+  /// ```motoko
+  /// let sorted = Store.keysByValue(store, Text.compare, "index_status", "active", #ascending, func (_, acc) = acc.balance, Nat.compare);
+  /// ```
+  public func keysByValue<K, V, A>(
+    store : Store<K, V>,
+    compareKey : Compare<K>,
+    indexName : IndexName,
+    indexValue : Text,
+    order : SortOrder,
+    projector : (K, V) -> A,
+    compareProjection : Compare<A>
+  ) : Result.Result<[K], StoreError> {
+    switch (keysBy(store, indexName, indexValue)) {
+      case (#err e) { #err e };
+      case (#ok keysAtIndex) {
+        sortKeysByProjection(store, compareKey, keysAtIndex, order, projector, compareProjection)
+      };
+    }
+  };
+
+  /// Returns a paginated slice of keys sorted by a projection of their values.
+  /// ```motoko
+  /// let page = Store.pageKeysByValue(store, Text.compare, "index_status", "active", #descending, 0, 2, func (_, acc) = acc.balance, Nat.compare);
+  /// ```
+  public func pageKeysByValue<K, V, A>(
+    store : Store<K, V>,
+    compareKey : Compare<K>,
+    indexName : IndexName,
+    indexValue : Text,
+    order : SortOrder,
+    offset : Nat,
+    limit : Nat,
+    projector : (K, V) -> A,
+    compareProjection : Compare<A>
+  ) : Result.Result<[K], StoreError> {
+    switch (keysByValue(store, compareKey, indexName, indexValue, order, projector, compareProjection)) {
+      case (#err e) { #err e };
+      case (#ok orderedKeys) { #ok(paginateArray(orderedKeys, offset, limit)) };
+    }
   };
 
   /// Registers a new empty index. Existing records are unaffected until reindexed explicitly.

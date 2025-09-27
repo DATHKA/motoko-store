@@ -2,6 +2,7 @@ import { test } "mo:test";
 import Store "../src/";
 import Text "mo:core/Text";
 import Array "mo:core/Array";
+import Nat "mo:core/Nat";
 
 type StoreRecord = {
   name : Text;
@@ -65,6 +66,24 @@ test("Store core CRUD and indexing", func () {
     case (#ok keys) { keys };
   };
   assert activeKeys == ["acct-1", "acct-3"];
+
+  let descendingKeys = switch (Store.keysByOrder<Text, StoreRecord>(store, "index_status", "active", #descending)) {
+    case (#err _) { assert false; return };
+    case (#ok keys) { keys };
+  };
+  assert descendingKeys == ["acct-3", "acct-1"];
+
+  let orderedPage = switch (Store.pageKeysByOrder<Text, StoreRecord>(store, "index_status", "active", #descending, 0, 1)) {
+    case (#err _) { assert false; return };
+    case (#ok keys) { keys };
+  };
+  assert orderedPage == ["acct-3"];
+
+  let ascendingKeys = switch (Store.keysByOrder<Text, StoreRecord>(store, "index_status", "active", #ascending)) {
+    case (#err _) { assert false; return };
+    case (#ok keys) { keys };
+  };
+  assert ascendingKeys == ["acct-1", "acct-3"];
 
   let hardwareValues = switch (Store.valuesBy<Text, StoreRecord>(store, Text.compare, "index_category", "hardware")) {
     case (#err _) { assert false; return };
@@ -156,6 +175,80 @@ test("Store core CRUD and indexing", func () {
     case (#ok keys) { keys };
   };
   assert Array.indexOf<Text>(postRemovalKeys, Text.equal, "acct-4x") != null;
+
+  type DepositAccount = {
+    balance : Nat;
+    status : Text;
+  };
+
+  let accounts = Store.empty<Text, DepositAccount>("account-store");
+  ignore Store.registerIndex<Text, DepositAccount>(accounts, "index_status");
+
+  ignore Store.add<Text, DepositAccount>(
+    accounts,
+    Text.compare,
+    "acct-low",
+    { balance = 100; status = "active" },
+    ?[("index_status", "active")]
+  );
+  ignore Store.add<Text, DepositAccount>(
+    accounts,
+    Text.compare,
+    "acct-mid",
+    { balance = 500; status = "active" },
+    ?[("index_status", "active")]
+  );
+  ignore Store.add<Text, DepositAccount>(
+    accounts,
+    Text.compare,
+    "acct-high",
+    { balance = 900; status = "active" },
+    ?[("index_status", "active")]
+  );
+
+  let balanceDescending = switch (Store.keysByValue<Text, DepositAccount, Nat>(
+    accounts,
+    Text.compare,
+    "index_status",
+    "active",
+    #descending,
+    func (_, acc) = acc.balance,
+    Nat.compare
+  )) {
+    case (#err _) { assert false; return };
+    case (#ok keys) { keys };
+  };
+  assert balanceDescending == ["acct-high", "acct-mid", "acct-low"];
+
+  let balanceAscendingPage = switch (Store.pageKeysByValue<Text, DepositAccount, Nat>(
+    accounts,
+    Text.compare,
+    "index_status",
+    "active",
+    #ascending,
+    0,
+    2,
+    func (_, acc) = acc.balance,
+    Nat.compare
+  )) {
+    case (#err _) { assert false; return };
+    case (#ok keys) { keys };
+  };
+  assert balanceAscendingPage == ["acct-low", "acct-mid"];
+
+  let balanceAscending = switch (Store.keysByValue<Text, DepositAccount, Nat>(
+    accounts,
+    Text.compare,
+    "index_status",
+    "active",
+    #ascending,
+    func (_, acc) = acc.balance,
+    Nat.compare
+  )) {
+    case (#err _) { assert false; return };
+    case (#ok keys) { keys };
+  };
+  assert balanceAscending == ["acct-low", "acct-mid", "acct-high"];
 
   switch (Store.clearIndex<Text, StoreRecord>(store, "index_category")) {
     case (#err _) { assert false; return };
