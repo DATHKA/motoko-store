@@ -55,6 +55,7 @@ module {
     index : Map.Map<IndexName, Index<K>>;
   };
 
+  /// Comparator function signature used by store operations to order keys.
   public type Compare<K> = (K, K) -> Order.Order;
 
   /// Internal structure representing key sets for an index.
