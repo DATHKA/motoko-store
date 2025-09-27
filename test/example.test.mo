@@ -1,33 +1,5 @@
-# store
-
-`store` is a lightweight key/value data structure for Motoko projects that need
-mutable records together with secondary indexes. Each index tracks a specific
-set key (for example, `index_status` or `index_category`) and can be queried later to
-retrieve the matching records. The library is designed for stable storage and
-works with the core Motoko `Map` / `Set` modules introduced in `mo:core` 1.0.0.
-
-## Installation
-
-Add the package to your project with [MOPS](https://mops.one):
-
-```bash
-mops add store
-```
-
-Then import it in your Motoko canister/code:
-
-```motoko
-import Store "mo:store";
-```
-
-## Usage
-
-The example below registers two indexes (`index_status` and `index_category`), stores a few
-records, and performs lookups via the `index_status` index. All operations that touch
-keys require the comparator to be supplied—here we use `Text.compare`.
-
-```motoko
-import Store "mo:store";
+import { test } "mo:test";
+import Store "../src";
 import Text "mo:core/Text";
 import Array "mo:core/Array";
 import Nat "mo:core/Nat";
@@ -39,7 +11,10 @@ type Merchant = {
   category : Text;
 };
 
-func main() : async () {
+
+test("Example", func () {
+  Debug.print("HELLO");
+
   // Initialise an empty store and register indexes for status and category.
   let store = Store.empty<Text, Merchant>("merchant-store");
 
@@ -163,8 +138,4 @@ func main() : async () {
   Debug.print("Descending active keys: " # joinKeys(descendingKeys));
   Debug.print("By balance (desc): " # joinKeys(byBalanceDescending));
   Debug.print("Balance page (asc): " # joinKeys(byBalanceAscendingPage));
-}
-```
-
-See `src/lib.mo` for the full API, including helpers for updates, renaming
-keys, rebuilding indexes, advanced sorting utilities, and validating index consistency.
+});
