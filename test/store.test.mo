@@ -18,10 +18,10 @@ func assertContains(values : [Text], needle : Text) {
 };
 
 test("Store core CRUD and indexing", func () {
-  let store = switch (Store.init<Text, StoreRecord>("merchant-store", ?["status", "category"])) {
-    case (#err _) { assert false; return };
-    case (#ok s) { s };
-  };
+  let store = Store.empty<Text, StoreRecord>("merchant-store");
+
+  ignore Store.registerIndex<Text, StoreRecord>(store, "index_status");
+  ignore Store.registerIndex<Text, StoreRecord>(store, "index_category");
 
   assert Store.size<Text, StoreRecord>(store) == 0;
   assert not Store.exists<Text, StoreRecord>(store, Text.compare, "acct-1");
@@ -31,7 +31,7 @@ test("Store core CRUD and indexing", func () {
     Text.compare,
     "acct-1",
     record("Alpha", "active", "hardware"),
-    ?[("status", "active"), ("category", "hardware")]
+    ?[("index_status", "active"), ("index_category", "hardware")]
   )) {
     case (#err _) { assert false; return };
     case (#ok _) {};
@@ -41,7 +41,7 @@ test("Store core CRUD and indexing", func () {
     Text.compare,
     "acct-2",
     record("Beta", "inactive", "services"),
-    ?[("status", "inactive"), ("category", "services")]
+    ?[("index_status", "inactive"), ("index_category", "services")]
   )) {
     case (#err _) { assert false; return };
     case (#ok _) {};
@@ -51,7 +51,7 @@ test("Store core CRUD and indexing", func () {
     Text.compare,
     "acct-3",
     record("Gamma", "active", "hardware"),
-    ?[("status", "active"), ("category", "hardware")]
+    ?[("index_status", "active"), ("index_category", "hardware")]
   )) {
     case (#err _) { assert false; return };
     case (#ok _) {};
@@ -60,37 +60,37 @@ test("Store core CRUD and indexing", func () {
   assert Store.size<Text, StoreRecord>(store) == 3;
   assert Store.exists<Text, StoreRecord>(store, Text.compare, "acct-2");
 
-  let activeKeys = switch (Store.keysBy<Text, StoreRecord>(store, "status", "active")) {
+  let activeKeys = switch (Store.keysBy<Text, StoreRecord>(store, "index_status", "active")) {
     case (#err _) { assert false; return };
     case (#ok keys) { keys };
   };
   assert activeKeys == ["acct-1", "acct-3"];
 
-  let hardwareValues = switch (Store.valuesBy<Text, StoreRecord>(store, Text.compare, "category", "hardware")) {
+  let hardwareValues = switch (Store.valuesBy<Text, StoreRecord>(store, Text.compare, "index_category", "hardware")) {
     case (#err _) { assert false; return };
     case (#ok vals) { vals };
   };
   assert hardwareValues.size() == 2;
 
-  let countActive = switch (Store.countBy<Text, StoreRecord>(store, "status", "active")) {
+  let countActive = switch (Store.countBy<Text, StoreRecord>(store, "index_status", "active")) {
     case (#err _) { assert false; return };
     case (#ok n) { n };
   };
   assert countActive == 2;
 
-  let firstActive = switch (Store.firstBy<Text, StoreRecord>(store, Text.compare, "status", "active")) {
+  let firstActive = switch (Store.firstBy<Text, StoreRecord>(store, Text.compare, "index_status", "active")) {
     case (#err _) { assert false; return };
     case (#ok value) { value };
   };
   assert switch (firstActive) { case null false; case (?v) { v.status == "active" } };
 
-  let pagedKeys = switch (Store.pageKeysBy<Text, StoreRecord>(store, "status", "active", 1, 1)) {
+  let pagedKeys = switch (Store.pageKeysBy<Text, StoreRecord>(store, "index_status", "active", 1, 1)) {
     case (#err _) { assert false; return };
     case (#ok keys) { keys };
   };
   assert pagedKeys == ["acct-3"];
 
-  let pagedValues = switch (Store.pageBy<Text, StoreRecord>(store, Text.compare, "status", "active", 0, 1)) {
+  let pagedValues = switch (Store.pageBy<Text, StoreRecord>(store, Text.compare, "index_status", "active", 0, 1)) {
     case (#err _) { assert false; return };
     case (#ok vals) { vals };
   };
@@ -101,7 +101,7 @@ test("Store core CRUD and indexing", func () {
     Text.compare,
     "acct-4",
     record("Delta", "active", "hardware"),
-    ?[("status", "active"), ("category", "hardware")]
+    ?[("index_status", "active"), ("index_category", "hardware")]
   )) {
     case (#err _) { assert false; return };
     case (#ok value) { value };
@@ -114,7 +114,7 @@ test("Store core CRUD and indexing", func () {
     Text.compare,
     "acct-2",
     record("Beta", "active", "hardware"),
-    ?[("status", "active"), ("category", "hardware")]
+    ?[("index_status", "active"), ("index_category", "hardware")]
   )) {
     case (#err _) { assert false; return };
     case (#ok value) { value };
@@ -126,7 +126,7 @@ test("Store core CRUD and indexing", func () {
     Text.compare,
     "acct-3",
     func current = record(current.name, "inactive", current.category),
-    ?[("status", "inactive"), ("category", "hardware")]
+    ?[("index_status", "inactive"), ("index_category", "hardware")]
   )) {
     case (#err _) { assert false; return };
     case (#ok updated) { assert updated.status == "inactive" };
@@ -138,7 +138,7 @@ test("Store core CRUD and indexing", func () {
     "acct-4",
     "acct-4x",
     record("Delta", "active", "hardware"),
-    ?[("status", "active"), ("category", "hardware")]
+    ?[("index_status", "active"), ("index_category", "hardware")]
   )) {
     case (#err _) { assert false; return };
     case (#ok _) {};
@@ -151,18 +151,18 @@ test("Store core CRUD and indexing", func () {
     case (#ok removed) { assert removed.name == "Alpha" };
   };
 
-  let postRemovalKeys = switch (Store.keysBy<Text, StoreRecord>(store, "status", "active")) {
+  let postRemovalKeys = switch (Store.keysBy<Text, StoreRecord>(store, "index_status", "active")) {
     case (#err _) { assert false; return };
     case (#ok keys) { keys };
   };
   assert Array.indexOf<Text>(postRemovalKeys, Text.equal, "acct-4x") != null;
 
-  switch (Store.clearIndex<Text, StoreRecord>(store, "category")) {
+  switch (Store.clearIndex<Text, StoreRecord>(store, "index_category")) {
     case (#err _) { assert false; return };
     case (#ok _) {};
   };
 
-  let emptyAfterClear = switch (Store.valuesBy<Text, StoreRecord>(store, Text.compare, "category", "hardware")) {
+  let emptyAfterClear = switch (Store.valuesBy<Text, StoreRecord>(store, Text.compare, "index_category", "hardware")) {
     case (#err _) { assert false; return };
     case (#ok vals) { vals };
   };
@@ -173,40 +173,40 @@ test("Store core CRUD and indexing", func () {
 });
 
 test("Store index utilities", func () {
-  let store = switch (Store.init<Text, StoreRecord>("utility-store", ?["status", "category"])) {
-    case (#err _) { assert false; return };
-    case (#ok s) { s };
-  };
+  let store = Store.empty<Text, StoreRecord>("utility-store");
+
+  ignore Store.registerIndex<Text, StoreRecord>(store, "index_status");
+  ignore Store.registerIndex<Text, StoreRecord>(store, "index_category");
 
   ignore Store.add<Text, StoreRecord>(
     store,
     Text.compare,
     "acct-1",
     record("Alpha", "active", "hardware"),
-    ?[("status", "active"), ("category", "hardware")]
+    ?[("index_status", "active"), ("index_category", "hardware")]
   );
   ignore Store.add<Text, StoreRecord>(
     store,
     Text.compare,
     "acct-2",
     record("Beta", "inactive", "services"),
-    ?[("status", "inactive"), ("category", "services")]
+    ?[("index_status", "inactive"), ("index_category", "services")]
   );
 
-  switch (Store.registerIndex<Text, StoreRecord>(store, "namePrefix")) {
+  switch (Store.registerIndex<Text, StoreRecord>(store, "index_namePrefix")) {
     case (#err _) { assert false; return };
     case (#ok _) {};
   };
 
-  switch (Store.rebuildIndex<Text, StoreRecord>(store, Text.compare, "namePrefix", func value = value.name # "-prefix")) {
+  switch (Store.rebuildIndex<Text, StoreRecord>(store, Text.compare, "index_namePrefix", func value = value.name # "-prefix")) {
     case (#err _) { assert false; return };
     case (#ok _) {};
   };
 
   let names = Store.indexNames<Text, StoreRecord>(store);
-  assert Array.indexOf<Store.IndexName>(names, Text.equal, "namePrefix") != null;
+  assert Array.indexOf<Store.IndexName>(names, Text.equal, "index_namePrefix") != null;
 
-  let prefixKeys = switch (Store.indexKeys<Text, StoreRecord>(store, "namePrefix")) {
+  let prefixKeys = switch (Store.indexKeys<Text, StoreRecord>(store, "index_namePrefix")) {
     case (#err _) { assert false; return };
     case (#ok keys) { keys };
   };
@@ -216,25 +216,25 @@ test("Store index utilities", func () {
     store,
     Text.compare,
     "acct-2",
-    [("namePrefix", "Beta-prefix")],
-    [("namePrefix", "Beta-new")]
+    [("index_namePrefix", "Beta-prefix")],
+    [("index_namePrefix", "Beta-new")]
   )) {
     case (#err _) { assert false; return };
     case (#ok _) {};
   };
 
-  switch (Store.verifyIndex<Text, StoreRecord>(store, Text.compare, "namePrefix", func value = value.name # "-prefix")) {
+  switch (Store.verifyIndex<Text, StoreRecord>(store, Text.compare, "index_namePrefix", func value = value.name # "-prefix")) {
     case (#ok _) { assert false; return };
     case (#err (#inconsistent mismatches)) { assert mismatches > 0 };
     case (#err (#invalidIndex)) { assert false; return };
   };
 
-  switch (Store.rebuildIndex<Text, StoreRecord>(store, Text.compare, "namePrefix", func value = value.name # "-prefix")) {
+  switch (Store.rebuildIndex<Text, StoreRecord>(store, Text.compare, "index_namePrefix", func value = value.name # "-prefix")) {
     case (#err _) { assert false; return };
     case (#ok _) {};
   };
 
-  switch (Store.verifyIndex<Text, StoreRecord>(store, Text.compare, "namePrefix", func value = value.name # "-prefix")) {
+  switch (Store.verifyIndex<Text, StoreRecord>(store, Text.compare, "index_namePrefix", func value = value.name # "-prefix")) {
     case (#ok _) {};
     case (#err (#inconsistent _)) { assert false; return };
     case (#err (#invalidIndex)) { assert false; return };
@@ -251,36 +251,36 @@ test("Store index utilities", func () {
   let mapped = Store.mapValues<Text, StoreRecord, Text>(store, func (_, value) = value.name);
   assert Array.indexOf<Text>(mapped, Text.equal, "Alpha") != null;
 
-  switch (Store.clearIndex<Text, StoreRecord>(store, "namePrefix")) {
+  switch (Store.clearIndex<Text, StoreRecord>(store, "index_namePrefix")) {
     case (#err _) { assert false; return };
     case (#ok _) {};
   };
 
-  switch (Store.unregisterIndex<Text, StoreRecord>(store, "namePrefix")) {
+  switch (Store.unregisterIndex<Text, StoreRecord>(store, "index_namePrefix")) {
     case (#err _) { assert false; return };
     case (#ok _) {};
   };
 });
 
 test("Store handles error cases", func () {
-  let store = switch (Store.init<Text, StoreRecord>("errors", ?["status", "category"])) {
-    case (#err _) { assert false; return };
-    case (#ok s) { s };
-  };
+  let store = Store.empty<Text, StoreRecord>("errors");
+
+  ignore Store.registerIndex<Text, StoreRecord>(store, "index_status");
+  ignore Store.registerIndex<Text, StoreRecord>(store, "index_category");
 
   ignore Store.add<Text, StoreRecord>(
     store,
     Text.compare,
     "acct-1",
     record("Alpha", "active", "hardware"),
-    ?[("status", "active"), ("category", "hardware")]
+    ?[("index_status", "active"), ("index_category", "hardware")]
   );
   ignore Store.add<Text, StoreRecord>(
     store,
     Text.compare,
     "acct-2",
     record("Beta", "inactive", "services"),
-    ?[("status", "inactive"), ("category", "services")]
+    ?[("index_status", "inactive"), ("index_category", "services")]
   );
 
   switch (Store.add<Text, StoreRecord>(
@@ -288,7 +288,7 @@ test("Store handles error cases", func () {
     Text.compare,
     "acct-1",
     record("Duplicate", "active", "hardware"),
-    ?[("status", "active"), ("category", "hardware")]
+    ?[("index_status", "active"), ("index_category", "hardware")]
   )) {
     case (#err (#keyExists)) {};
     case (_) { assert false; return };
@@ -304,7 +304,7 @@ test("Store handles error cases", func () {
     Text.compare,
     "acct-4",
     record("Invalid", "active", "hardware"),
-    ?[("unknown", "bucket"), ("status", "active")]
+    ?[("unknown", "set"), ("index_status", "active")]
   )) {
     case (#err (#invalidIndex)) {};
     case (_) { assert false; return };
@@ -320,7 +320,7 @@ test("Store handles error cases", func () {
     Text.compare,
     "acct-5",
     record("PutInvalid", "active", "hardware"),
-    ?[("status", "active"), ("bogus", "bucket")]
+    ?[("index_status", "active"), ("bogus", "set")]
   )) {
     case (#err (#invalidIndex)) {};
     case (_) { assert false; return };
@@ -336,7 +336,7 @@ test("Store handles error cases", func () {
     Text.compare,
     "acct-1",
     func r = { r with status = "inactive" },
-    ?[("bogus", "bucket")]
+    ?[("bogus", "set")]
   )) {
     case (#err (#invalidIndex)) {};
     case (_) { assert false; return };
@@ -388,8 +388,8 @@ test("Store handles error cases", func () {
     store,
     Text.compare,
     "missing",
-    [("status", "active")],
-    [("status", "inactive")]
+    [("index_status", "active")],
+    [("index_status", "inactive")]
   )) {
     case (#err (#notFound)) {};
     case (_) { assert false; return };
@@ -399,8 +399,8 @@ test("Store handles error cases", func () {
     store,
     Text.compare,
     "acct-2",
-    [("status", "inactive")],
-    [("bogus", "bucket")]
+    [("index_status", "inactive")],
+    [("bogus", "set")]
   )) {
     case (#err (#invalidIndex)) {};
     case (_) { assert false; return };
@@ -416,7 +416,7 @@ test("Store handles error cases", func () {
     case (_) { assert false; return };
   };
 
-  switch (Store.registerIndex<Text, StoreRecord>(store, "status")) {
+  switch (Store.registerIndex<Text, StoreRecord>(store, "index_status")) {
     case (#err (#indexExists)) {};
     case (_) { assert false; return };
   };

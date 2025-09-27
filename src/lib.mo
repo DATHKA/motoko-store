@@ -10,15 +10,45 @@ import Nat "mo:core/Nat";
 
 module {
   /// Mutable key-value store with optional secondary indexes.
+  ///
+  /// A store keeps:
+  /// - `name` – descriptive label for logging and debugging.
+  /// - `records` – ordered `Map` from a comparable key `K` to value `V`.
+  /// - `index` – mapping from each registered `IndexName` to a set of keys that belong to that index.
+  ///
+  /// # Example
   /// ```motoko
-  /// let store = switch (Store.init<Text, Nat>("inventory", ?["status"])) {
-  ///   case (#ok s) s;
-  ///   case (#err _) { assert false; };
+  /// import Store "mo:store";
+  /// import Text "mo:core/Text";
+  ///
+  /// type Merchant = {
+  ///   name : Text;
+  ///   status : Text;
+  ///   category : Text;
   /// };
-  /// // Store.size(store) == 0
+  ///
+  /// let store = Store.empty<Text, Merchant>("merchants");
+  /// ignore Store.registerIndex<Text, Merchant>(store, "index_status");
+  /// ignore Store.registerIndex<Text, Merchant>(store, "index_category");
+  ///
+  /// ignore Store.add<Text, Merchant>(
+  ///   store,
+  ///   Text.compare,
+  ///   "acct-1",
+  ///   { name = "Alpha"; status = "active"; category = "hardware" },
+  ///   ?[("index_status", "active"), ("index_category", "hardware")]
+  /// );
+  ///
+  /// let activeMerchants = switch (Store.valuesBy<Text, Merchant>(store, Text.compare, "index_status", "active")) {
+  ///   case (#ok merchants) merchants;
+  ///   case (#err _) [];
+  /// };
   /// ```
- 
-
+  ///
+  /// In the example above `"index_status"` and `"index_category"` are `IndexName` values registered after
+  /// initialisation. Each subsequent call that manipulates indexes must supply the same
+  /// `IndexName` strings together with a set key (e.g. `"active"`) to place or retrieve
+  /// records from the corresponding indexed key set.
   public type Store<K, V> = {
     name : Text;
     records : Map.Map<K, V>;
@@ -27,16 +57,16 @@ module {
 
   public type Compare<K> = (K, K) -> Order.Order;
 
-  /// Internal structure representing buckets for an index.
+  /// Internal structure representing key sets for an index.
   /// ```motoko
   /// let idx = newEmptyIndex<Text>();
-  /// // idx.buckets.size() == 0
+  /// // idx.keySet.size() == 0
   /// ```
   public type Index<K> = {
-    buckets : Map.Map<Text, Set.Set<K>>;
+    keySet : Map.Map<Text, Set.Set<K>>;
   };
 
- /// Identifier used when referencing registered indexes within a store.
+  /// Identifier used when referencing registered indexes within a store.
   public type IndexName = Text;
 
   /// Errors that can be returned by store operations.
@@ -44,7 +74,7 @@ module {
   /// * `#keyExists` – attempted to add an already existing key.
   /// * `#indexMismatch` – provided index pairs do not match registered indexes.
   /// * `#invalidIndex` – referenced index name does not exist.
-  /// * `#notFound` – requested item or bucket was not found.
+  /// * `#notFound` – requested item or key set was not found.
   /// * `#indexExists` – attempted to register an index that already exists.
   public type StoreError = {
     #keyExists;
@@ -54,24 +84,24 @@ module {
     #indexExists;
   };
 
-  /// Creates a fresh index with no buckets.
+  /// Creates a fresh index with no key sets.
   /// ```motoko
   /// let idx = newEmptyIndex<Text>();
-  /// // Map.size(idx.buckets) == 0
+  /// // Map.size(idx.keySet) == 0
   /// ```
   func newEmptyIndex<K>() : Index<K> = {
-    buckets = Map.empty<Text, Set.Set<K>>();
+    keySet = Map.empty<Text, Set.Set<K>>();
   };
 
-  /// Normalises a list of `(indexName, bucketKey)` tuples so that every registered index
+  /// Normalises a list of `(indexName, setKey)` tuples so that every registered index
   /// is mentioned exactly once and appears at most once. Unknown index names or duplicate
   /// entries cause `#invalidIndex` / `#indexMismatch` errors respectively.
   /// The returned map is keyed by index name and is used by `add` / `put` when onboarding
   /// a record into every index.
   /// ```motoko
-  /// let pairs = [("status", "active"), ("region", "eu")];
+  /// let pairs = [("index_status", "active"), ("index_region", "eu")];
   /// let normalized = buildPairMapExact(store, pairs);
-  /// // normalized == #ok(map) and map.get("status") == ?"active"
+  /// // normalized == #ok(map) and map.get("index_status") == ?"active"
   /// ```
   func buildPairMapExact<K, V>(store : Store<K, V>, pairs : [(IndexName, Text)]) : Result.Result<Map.Map<IndexName, Text>, StoreError> {
     let normalized = Map.empty<IndexName, Text>();
@@ -92,13 +122,13 @@ module {
     #ok(normalized);
   };
 
-  /// Normalises a subset of `(indexName, bucketKey)` tuples without requiring full coverage.
+  /// Normalises a subset of `(indexName, setKey)` tuples without requiring full coverage.
   /// The subset must reference existing indexes and remain free of duplicates.
-  /// Useful when moving a key between only a few buckets (e.g. inside `reindexRecord`).
+  /// Useful when moving a key between only a few key sets (e.g. inside `reindexRecord`).
   /// ```motoko
-  /// let subset = [("status", "inactive")];
+  /// let subset = [("index_status", "inactive")];
   /// let normalized = buildPairMapSubset(store, subset);
-  /// // normalized == #ok(map) with map.get("status") == ?"inactive"
+  /// // normalized == #ok(map) with map.get("index_status") == ?"inactive"
   /// ```
   func buildPairMapSubset<K, V>(store : Store<K, V>, pairs : [(IndexName, Text)]) : Result.Result<Map.Map<IndexName, Text>, StoreError> {
     let normalized = Map.empty<IndexName, Text>();
@@ -116,12 +146,12 @@ module {
     #ok(normalized);
   };
 
-  /// Ensures callers provide a complete mapping of indexes to bucket keys when required.
+  /// Ensures callers provide a complete mapping of indexes to set keys when required.
   /// Returns the normalised map or the appropriate error when coverage is incomplete.
   /// When the store has no registered indexes, an empty map is returned regardless of input.
   /// `add` and `put` rely on this helper to enforce index coverage for new keys.
   /// ```motoko
-  /// let normalized = requireIndexPairs(store, ?[("status", "active"), ("region", "eu")]);
+  /// let normalized = requireIndexPairs(store, ?[("index_status", "active"), ("index_region", "eu")]);
   /// // normalized == #ok(map) only when store has exactly those indexes
   /// ```
   func requireIndexPairs<K, V>(store : Store<K, V>, pairs : ?[(IndexName, Text)]) : Result.Result<Map.Map<IndexName, Text>, StoreError> {
@@ -143,25 +173,25 @@ module {
     };
   };
 
-  /// Adds a key to each indexed bucket described by `pairs`.
+  /// Adds a key to each indexed key set described by `pairs`.
   /// ```motoko
   /// addKeyToIndexes(store, "acct-1", pairMap);
-  /// // key now appears in each referenced bucket
+  /// // key now appears in each referenced set
   /// ```
   func addKeyToIndexes<K, V>(store : Store<K, V>, compareKey : Compare<K>, key : K, pairs : Map.Map<IndexName, Text>) {
     for (entry in Map.entries(pairs)) {
-      let (indexName, bucketKey) = entry;
-          switch (Map.get(store.index, Text.compare, indexName)) {
+      let (indexName, setKey) = entry;
+      switch (Map.get(store.index, Text.compare, indexName)) {
         case null {};
         case (?idx) {
-          switch (Map.get(idx.buckets, Text.compare, bucketKey)) {
+          switch (Map.get(idx.keySet, Text.compare, setKey)) {
             case null {
-              let bucket = Set.empty<K>();
-              Set.add(bucket, compareKey, key);
-              Map.add(idx.buckets, Text.compare, bucketKey, bucket);
+              let set = Set.empty<K>();
+              Set.add(set, compareKey, key);
+              Map.add(idx.keySet, Text.compare, setKey, set);
             };
-            case (?bucket) {
-              Set.add(bucket, compareKey, key);
+            case (?set) {
+              Set.add(set, compareKey, key);
             };
           };
         };
@@ -169,23 +199,23 @@ module {
     };
   };
 
-  /// Removes a key from the index buckets listed in `pairs`.
+  /// Removes a key from the index key sets listed in `pairs`.
   /// ```motoko
-  /// removeKeyFromBuckets(store, "acct-1", pairMap);
-  /// // key removed from each mapped bucket
+  /// removeKeyFromKeySets(store, "acct-1", pairMap);
+  /// // key removed from each mapped set
   /// ```
-  func removeKeyFromBuckets<K, V>(store : Store<K, V>, compareKey : Compare<K>, key : K, pairs : Map.Map<IndexName, Text>) {
+  func removeKeyFromKeySets<K, V>(store : Store<K, V>, compareKey : Compare<K>, key : K, pairs : Map.Map<IndexName, Text>) {
     for (entry in Map.entries(pairs)) {
-      let (indexName, bucketKey) = entry;
+      let (indexName, setKey) = entry;
       switch (Map.get(store.index, Text.compare, indexName)) {
         case null {};
         case (?idx) {
-          switch (Map.get(idx.buckets, Text.compare, bucketKey)) {
+          switch (Map.get(idx.keySet, Text.compare, setKey)) {
             case null {};
-            case (?bucket) {
-              Set.remove(bucket, compareKey, key);
-              if (Set.size(bucket) == 0) {
-                Map.remove(idx.buckets, Text.compare, bucketKey);
+            case (?set) {
+              Set.remove(set, compareKey, key);
+              if (Set.size(set) == 0) {
+                Map.remove(idx.keySet, Text.compare, setKey);
               };
             };
           };
@@ -194,22 +224,22 @@ module {
     };
   };
 
-  /// Removes a key from every bucket across all indexes.
+  /// Removes a key from every key set across all indexes.
   /// ```motoko
   /// removeKeyFromAllIndexes(store, "acct-1");
-  /// // key no longer present in any index buckets
+  /// // key no longer present in any index key set
   /// ```
   func removeKeyFromAllIndexes<K, V>(store : Store<K, V>, compareKey : Compare<K>, key : K) {
     for (entry in Map.entries(store.index)) {
       let (_, idx) = entry;
-      let bucketNames = Iter.toArray(Map.keys(idx.buckets));
-      for (bucketName in bucketNames.vals()) {
-        switch (Map.get(idx.buckets, Text.compare, bucketName)) {
+      let setNames = Iter.toArray(Map.keys(idx.keySet));
+      for (setName in setNames.vals()) {
+        switch (Map.get(idx.keySet, Text.compare, setName)) {
           case null {};
-          case (?bucket) {
-            Set.remove(bucket, compareKey, key);
-            if (Set.size(bucket) == 0) {
-              Map.remove(idx.buckets, Text.compare, bucketName);
+          case (?set) {
+            Set.remove(set, compareKey, key);
+            if (Set.size(set) == 0) {
+              Map.remove(idx.keySet, Text.compare, setName);
             };
           };
         };
@@ -217,8 +247,8 @@ module {
     };
   };
 
-  /// Collects the bucket assignment for a key across every registered index.
-  /// Used when migrating a key and the existing bucket arrangement must be preserved.
+  /// Collects the key-set assignment for a key across every registered index.
+  /// Used when migrating a key and the existing key-set arrangement must be preserved.
   /// Returns an empty map when the key is unindexed or when the store has no indexes.
   /// ```motoko
   /// let pairs = collectIndexPairsForKey(store, Text.compare, "acct-1");
@@ -229,14 +259,14 @@ module {
     for (entry in Map.entries(store.index)) {
       let (indexName, idx) = entry;
       var located = false;
-      let bucketNames = Iter.toArray(Map.keys(idx.buckets));
-      label scanBuckets for (bucketName in bucketNames.vals()) {
-        if (located) { continue scanBuckets };
-        switch (Map.get(idx.buckets, Text.compare, bucketName)) {
+      let setNames = Iter.toArray(Map.keys(idx.keySet));
+      label scanSets for (setName in setNames.vals()) {
+        if (located) { continue scanSets };
+        switch (Map.get(idx.keySet, Text.compare, setName)) {
           case null {};
-          case (?bucket) {
-            if (Set.contains(bucket, compareKey, key)) {
-              Map.add(pairs, Text.compare, indexName, bucketName);
+          case (?set) {
+            if (Set.contains(set, compareKey, key)) {
+              Map.add(pairs, Text.compare, indexName, setName);
               located := true;
             };
           };
@@ -271,35 +301,20 @@ module {
     Array.tabulate<T>(length, func i = items[offset + i]);
   };
 
-  /// Creates a new store with optional pre-registered index names.
+  /// Creates a new store with no records and no indexes.
   /// ```motoko
-  /// let created = Store.init<Text, Nat>("inventory", ?["status"]);
-  /// // created == #ok(_)
+  /// let store = Store.empty<Text, Nat>("inventory");
+  /// // Store.size(store) == 0 and Store.indexNames(store) == []
   /// ```
-  public func init<K, V>(
-    name : Text,
-    indexNames : ?[IndexName]
-  ) : Result.Result<Store<K, V>, StoreError> {
+  public func empty<K, V>(
+    name : Text
+  ) : Store<K, V> {
     let store : Store<K, V> = {
       name = name;
       records = Map.empty<K, V>();
       index = Map.empty<IndexName, Index<K>>();
     };
-
-    switch (indexNames) {
-      case null {};
-      case (?names) {
-        for (nm in Array.values(names)) {
-          switch (Map.get(store.index, Text.compare, nm)) {
-            case null {};
-            case (?_) { return #err(#indexMismatch) };
-          };
-          Map.add(store.index, Text.compare, nm, newEmptyIndex<K>());
-        };
-      };
-    };
-
-    #ok(store);
+    store;
   };
 
   /// Returns true when record `k` exists.
@@ -320,7 +335,7 @@ module {
     Map.size(store.records);
   };
 
-  /// Removes all records and clears all index buckets.
+  /// Removes all records and clears all index key sets.
   /// ```motoko
   /// Store.clear(store);
   /// // Store.size(store) == 0
@@ -329,20 +344,20 @@ module {
     Map.clear(store.records);
     for (entry in Map.entries(store.index)) {
       let (_, idx) = entry;
-      Map.clear(idx.buckets);
+      Map.clear(idx.keySet);
     };
   };
 
   /// Clears a single index by name.
   /// ```motoko
-  /// let cleared = Store.clearIndex(store, "status");
+  /// let cleared = Store.clearIndex(store, "index_status");
   /// // cleared == #ok(()) when the index exists
   /// ```
   public func clearIndex<K, V>(store : Store<K, V>, name : Text) : Result.Result<(), StoreError> {
     switch (Map.get(store.index, Text.compare, name)) {
       case null { #err(#invalidIndex) };
       case (?idx) {
-        Map.clear(idx.buckets);
+        Map.clear(idx.keySet);
         #ok(())
       };
     };
@@ -350,7 +365,7 @@ module {
 
   /// Inserts a record enforcing that index pairs match registered indexes.
   /// ```motoko
-  /// let added = Store.add(store, Text.compare, "acct-1", record, ?[("status", "active")]);
+  /// let added = Store.add(store, Text.compare, "acct-1", record, ?[("index_status", "active")]);
   /// // added == #ok(()) and the record now exists in `store.records`
   /// ```
   public func add<K, V>(store : Store<K, V>, compareKey : Compare<K>, k : K, v : V, pairs : ?[(IndexName, Text)]) : Result.Result<(), StoreError> {
@@ -368,10 +383,10 @@ module {
 
   /// Upserts a record. Returns the previous value, if any, and optionally reindexes the key
   /// when `pairs` is provided. New records in an indexed store must supply the full mapping;
-  /// existing records retain their current buckets when `pairs` is omitted.
+  /// existing records retain their current key sets when `pairs` is omitted.
   /// ```motoko
-  /// let putResult = Store.put(store, Text.compare, "acct-1", record, ?[("status", "active")]);
-  /// // putResult == #ok(null) and the record is stored with fresh index buckets
+  /// let putResult = Store.put(store, Text.compare, "acct-1", record, ?[("index_status", "active")]);
+  /// // putResult == #ok(null) and the record is stored with fresh index key sets
   /// ```
   public func put<K, V>(store : Store<K, V>, compareKey : Compare<K>, k : K, v : V, pairs : ?[(IndexName, Text)]) : Result.Result<?V, StoreError> {
     let existing = Map.get(store.records, compareKey, k);
@@ -415,7 +430,7 @@ module {
 
   /// Applies a transformer to an existing record and optionally reindexes it.
   /// The transformer receives the current value and returns the replacement value.
-  /// When `pairs` is provided, the key is removed from all previous buckets and re-added
+  /// When `pairs` is provided, the key is removed from all previous key sets and re-added
   /// with the new mapping; when `pairs` is `null`, only the record value changes.
   /// ```motoko
   /// let updated = Store.update(
@@ -423,9 +438,9 @@ module {
   ///   Text.compare,
   ///   "acct-1",
   ///   func r = { r with status = "inactive" },
-  ///   ?[("status", "inactive")]
+  ///   ?[("index_status", "inactive")]
   /// );
-  /// // updated == #ok(newRecord) and the index buckets now reference "inactive"
+  /// // updated == #ok(newRecord) and the index key sets now reference "inactive"
   /// ```
   public func update<K, V>(
     store : Store<K, V>,
@@ -550,9 +565,9 @@ module {
   };
 
   /// Returns keys found under a specific index value. The array mirrors the contents of the
-  /// bucket at the time of the call.
+  /// key set at the time of the call.
   /// ```motoko
-  /// let keys = Store.keysBy(store, "status", "active");
+  /// let keys = Store.keysBy(store, "index_status", "active");
   /// // keys == #ok([...]) containing all matching account identifiers
   /// ```
   public func keysBy<K, V>(store : Store<K, V>, indexName : IndexName, indexValue : Text) : Result.Result<[K], StoreError> {
@@ -560,17 +575,17 @@ module {
       case null { return #err(#invalidIndex) };
       case (?value) { value };
     };
-    switch (Map.get(idx.buckets, Text.compare, indexValue)) {
+    switch (Map.get(idx.keySet, Text.compare, indexValue)) {
       case null { #ok(Array.empty<K>()) };
-      case (?bucket) { #ok(Iter.toArray(Set.values(bucket))) };
+      case (?set) { #ok(Iter.toArray(Set.values(set))) };
     };
   };
 
   /// Returns values found under a specific index value. The helper rehydrates each key and
-  /// reports `#err(#notFound)` if a bucket contains stale keys.
+  /// reports `#err(#notFound)` if a key set contains stale keys.
   /// ```motoko
-  /// let vals = Store.valuesBy(store, Text.compare, "status", "active");
-  /// // vals == #ok([...]) and stale buckets trigger #err(#notFound)
+  /// let vals = Store.valuesBy(store, Text.compare, "index_status", "active");
+  /// // vals == #ok([...]) and stale key sets trigger #err(#notFound)
   /// ```
   public func valuesBy<K, V>(store : Store<K, V>, compareKey : Compare<K>, indexName : IndexName, indexValue : Text) : Result.Result<[V], StoreError> {
     switch (keysBy(store, indexName, indexValue)) {
@@ -590,23 +605,23 @@ module {
 
   /// Counts the number of keys present for an index value.
   /// ```motoko
-  /// let total = Store.countBy(store, "status", "active");
-  /// // total == #ok(2) meaning two keys live in the bucket
+  /// let total = Store.countBy(store, "index_status", "active");
+  /// // total == #ok(2) meaning two keys live in the set
   /// ```
   public func countBy<K, V>(store : Store<K, V>, indexName : IndexName, indexValue : Text) : Result.Result<Nat, StoreError> {
     let idx = switch (Map.get(store.index, Text.compare, indexName)) {
       case null { return #err(#invalidIndex) };
       case (?value) { value };
     };
-    switch (Map.get(idx.buckets, Text.compare, indexValue)) {
+    switch (Map.get(idx.keySet, Text.compare, indexValue)) {
       case null { #ok(0) };
-      case (?bucket) { #ok(Set.size(bucket)) };
+      case (?set) { #ok(Set.size(set)) };
     };
   };
 
   /// Returns the first value under an index value, if present.
   /// ```motoko
-  /// let first = Store.firstBy(store, Text.compare, "status", "active");
+  /// let first = Store.firstBy(store, Text.compare, "index_status", "active");
   /// // first == #ok(?value) where ?value is the lowest-key record
   /// ```
   public func firstBy<K, V>(store : Store<K, V>, compareKey : Compare<K>, indexName : IndexName, indexValue : Text) : Result.Result<?V, StoreError> {
@@ -614,10 +629,10 @@ module {
       case null { return #err(#invalidIndex) };
       case (?value) { value };
     };
-    switch (Map.get(idx.buckets, Text.compare, indexValue)) {
+    switch (Map.get(idx.keySet, Text.compare, indexValue)) {
       case null { #ok(null) };
-      case (?bucket) {
-        let iterator = Set.values(bucket);
+      case (?set) {
+        let iterator = Set.values(set);
         switch (iterator.next()) {
           case null { #ok(null) };
           case (?key) { #ok(Map.get(store.records, compareKey, key)) };
@@ -630,7 +645,7 @@ module {
   /// `offset` skips the given number of matches, `limit` caps how many keys are returned.
   /// Supplying `offset >= size` naturally produces an empty array.
   /// ```motoko
-  /// let page = Store.pageKeysBy(store, "status", "active", 0, 2);
+  /// let page = Store.pageKeysBy(store, "index_status", "active", 0, 2);
   /// // page == #ok(["acct-1", "acct-3"]) skipping 0 keys and returning at most 2
   /// ```
   public func pageKeysBy<K, V>(
@@ -648,9 +663,9 @@ module {
 
   /// Returns a slice of values for an index value using zero-based pagination.
   /// `offset` skips the given number of matches, `limit` caps how many values are returned.
-  /// The helper aborts with `#err(#notFound)` if any bucket entry fails to resolve.
+  /// The helper aborts with `#err(#notFound)` if any key-set entry fails to resolve.
   /// ```motoko
-  /// let page = Store.pageBy(store, Text.compare, "status", "active", 0, 1);
+  /// let page = Store.pageBy(store, Text.compare, "index_status", "active", 0, 1);
   /// // page == #ok([value]) after skipping 0 keys and returning at most 1
   /// ```
   public func pageBy<K, V>(
@@ -678,7 +693,7 @@ module {
 
   /// Registers a new empty index. Existing records are unaffected until reindexed explicitly.
   /// ```motoko
-  /// let registered = Store.registerIndex(store, "region");
+  /// let registered = Store.registerIndex(store, "index_region");
   /// // registered == #ok(()) and the store now tracks the new index
   /// ```
   public func registerIndex<K, V>(store : Store<K, V>, name : IndexName) : Result.Result<(), StoreError> {
@@ -690,10 +705,10 @@ module {
     #ok(());
   };
 
-  /// Removes an index and all its buckets. Existing records remain stored but the index is
+  /// Removes an index and all its key sets. Existing records remain stored but the index is
   /// no longer maintained.
   /// ```motoko
-  /// let removed = Store.unregisterIndex(store, "region");
+  /// let removed = Store.unregisterIndex(store, "index_region");
   /// // removed == #ok(()) and the index name is no longer registered
   /// ```
   public func unregisterIndex<K, V>(store : Store<K, V>, name : IndexName) : Result.Result<(), StoreError> {
@@ -706,30 +721,30 @@ module {
   /// Lists the registered index names in ascending (lexicographic) order.
   /// ```motoko
   /// let names = Store.indexNames(store);
-  /// // names might be ["status", "category"]
+  /// // names might be ["index_status", "index_category"]
   /// ```
   public func indexNames<K, V>(store : Store<K, V>) : [IndexName] {
     Iter.toArray(Map.keys(store.index));
   };
 
-  /// Lists bucket keys for a specific index in ascending order.
+  /// Lists key-set identifiers for a specific index in ascending order.
   /// ```motoko
-  /// let buckets = Store.indexKeys(store, "status");
-  /// // buckets == #ok(["active", "inactive"])
+  /// let keySets = Store.indexKeys(store, "index_status");
+  /// // keySets == #ok(["active", "inactive"])
   /// ```
   public func indexKeys<K, V>(store : Store<K, V>, name : IndexName) : Result.Result<[Text], StoreError> {
     switch (Map.get(store.index, Text.compare, name)) {
       case null { #err(#invalidIndex) };
-      case (?idx) { #ok(Iter.toArray(Map.keys(idx.buckets))) };
+      case (?idx) { #ok(Iter.toArray(Map.keys(idx.keySet))) };
     };
   };
 
-  /// Updates index membership by replacing old bucket assignments with new ones.
-  /// The key is removed from every bucket in `oldPairs` and inserted into each bucket in
+  /// Updates index membership by replacing old key-set assignments with new ones.
+  /// The key is removed from every set in `oldPairs` and inserted into each set in
   /// `newPairs`; both arguments typically originate from `buildPairMapSubset`.
   /// ```motoko
-  /// let reindexed = Store.reindexRecord(store, Text.compare, "acct-2", [("status", "inactive")], [("status", "active")]);
-  /// // reindexed == #ok(()) after moving the key to the "active" bucket
+  /// let reindexed = Store.reindexRecord(store, Text.compare, "acct-2", [("index_status", "inactive")], [("index_status", "active")]);
+  /// // reindexed == #ok(()) after moving the key to the "active" set
   /// ```
   public func reindexRecord<K, V>(
     store : Store<K, V>,
@@ -750,35 +765,35 @@ module {
       case (#err e) { return #err e };
       case (#ok map) { map };
     };
-    removeKeyFromBuckets(store, compareKey, k, oldMap);
+    removeKeyFromKeySets(store, compareKey, k, oldMap);
     addKeyToIndexes(store, compareKey, k, newMap);
     #ok(());
   };
 
-  /// Rebuilds an index by projecting over all records, clearing existing buckets first.
-  /// Useful when the logic that determines bucket keys has changed. The `projector` receives
-  /// each record value and returns the bucket identifier to store it under.
+  /// Rebuilds an index by projecting over all records, clearing existing key sets first.
+  /// Useful when the logic that determines set keys has changed. The `projector` receives
+  /// each record value and returns the set identifier to store it under.
   /// ```motoko
-  /// let rebuilt = Store.rebuildIndex(store, Text.compare, "status", func v = v.status);
-  /// // rebuilt == #ok(()) and buckets now reflect projector output
+  /// let rebuilt = Store.rebuildIndex(store, Text.compare, "index_status", func v = v.status);
+  /// // rebuilt == #ok(()) and key sets now reflect projector output
   /// ```
   public func rebuildIndex<K, V>(store : Store<K, V>, compareKey : Compare<K>, name : IndexName, projector : V -> Text) : Result.Result<(), StoreError> {
     let idx = switch (Map.get(store.index, Text.compare, name)) {
       case null { return #err(#invalidIndex) };
       case (?value) { value };
     };
-    Map.clear(idx.buckets);
+    Map.clear(idx.keySet);
     for (entry in Map.entries(store.records)) {
       let (key, value) = entry;
-      let bucketName = projector(value);
-      switch (Map.get(idx.buckets, Text.compare, bucketName)) {
+      let setName = projector(value);
+      switch (Map.get(idx.keySet, Text.compare, setName)) {
         case null {
-          let bucket = Set.empty<K>();
-          Set.add(bucket, compareKey, key);
-          Map.add(idx.buckets, Text.compare, bucketName, bucket);
+          let set = Set.empty<K>();
+          Set.add(set, compareKey, key);
+          Map.add(idx.keySet, Text.compare, setName, set);
         };
-        case (?bucket) {
-          Set.add(bucket, compareKey, key);
+        case (?set) {
+          Set.add(set, compareKey, key);
         };
       };
     };
@@ -788,8 +803,8 @@ module {
   /// Verifies that an index matches a projector. Returns mismatch count when inconsistent.
   /// The projector must use the same logic as was used to populate the index initially.
   /// ```motoko
-  /// let verified = Store.verifyIndex(store, Text.compare, "status", func v = v.status);
-  /// // verified == #ok(()) when buckets are aligned, otherwise #err(#inconsistent n)
+  /// let verified = Store.verifyIndex(store, Text.compare, "index_status", func v = v.status);
+  /// // verified == #ok(()) when key sets are aligned, otherwise #err(#inconsistent n)
   /// ```
   public func verifyIndex<K, V>(
     store : Store<K, V>,
@@ -814,24 +829,24 @@ module {
 
     for (entry in Map.entries(store.records)) {
       let (key, value) = entry;
-      let bucketName = projector(value);
-      switch (Map.get(idx.buckets, Text.compare, bucketName)) {
+      let setName = projector(value);
+      switch (Map.get(idx.keySet, Text.compare, setName)) {
         case null { flag(key) };
-        case (?bucket) {
-          if (not Set.contains(bucket, compareKey, key)) {
+        case (?set) {
+          if (not Set.contains(set, compareKey, key)) {
             flag(key);
           };
         };
       };
     };
 
-    for (bucketEntry in Map.entries(idx.buckets)) {
-      let (bucketName, bucket) = bucketEntry;
-      for (key in Set.values(bucket)) {
+    for (setEntry in Map.entries(idx.keySet)) {
+      let (setName, set) = setEntry;
+      for (key in Set.values(set)) {
         switch (Map.get(store.records, compareKey, key)) {
           case null { flag(key) };
           case (?value) {
-            if (bucketName != projector(value)) {
+            if (setName != projector(value)) {
               flag(key);
             };
           };
