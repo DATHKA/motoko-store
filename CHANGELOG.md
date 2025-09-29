@@ -1,5 +1,10 @@
 # store changelog
 
+# 0.1.2
+* Added SortOrder type and ordering helpers for keys and value projections
+* Expanded README with sorting examples and clearer inline guidance
+* Updated tests to cover ordered key and value lookups
+
 # 0.1.1
 * Documentation improvement
 

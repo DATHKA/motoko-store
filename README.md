@@ -63,6 +63,22 @@ func main() : async () {
     ?[("index_status", "inactive"), ("index_category", "services")]
   );
 
+  ignore Store.add<Text, Merchant>(
+    store,
+    Text.compare,
+    "acct-3",
+    { name = "Gamma"; status = "active"; category = "hardware" },
+    ?[("index_status", "active"), ("index_category", "hardware")]
+  );
+
+  ignore Store.add<Text, Merchant>(
+    store,
+    Text.compare,
+    "acct-4",
+    { name = "Delta"; status = "inactive"; category = "services" },
+    ?[("index_status", "inactive"), ("index_category", "services")]
+  );
+
   // Pull all active merchants via the index.
   let activeMerchants = switch (Store.valuesBy<Text, Merchant>(store, Text.compare, "index_status", "active")) {
     case (#ok merchants) merchants;
@@ -161,8 +177,8 @@ func main() : async () {
   Debug.print("First inactive: " # (switch (firstInactive) { case null "none"; case (?m) m.name }));
   Debug.print("Ascending active keys: " # joinKeys(ascendingKeys));
   Debug.print("Descending active keys: " # joinKeys(descendingKeys));
-  Debug.print("By balance (desc): " # joinKeys(byBalanceDescending));
-  Debug.print("Balance page (asc): " # joinKeys(byBalanceAscendingPage));
+  Debug.print("By balance (descending): " # joinKeys(byBalanceDescending));
+  Debug.print("Balance page (page 1, 2 items, ascending): " # joinKeys(byBalanceAscendingPage));
 }
 ```
 
