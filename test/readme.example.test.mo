@@ -3,6 +3,7 @@ import Store "../src";
 import Text "mo:core/Text";
 import Array "mo:core/Array";
 import Nat "mo:core/Nat";
+import Iter "mo:core/Iter";
 import Debug "mo:core/Debug";
 
 type Merchant = {
@@ -54,7 +55,7 @@ test("Example", func () {
 
   // Pull all active merchants via the index.
   let activeMerchants = switch (Store.valuesBy<Text, Merchant>(store, Text.compare, "index_status", "active")) {
-    case (#ok merchants) merchants;
+    case (#ok iter) Iter.toArray(iter);
     case (#err _) [];
   };
   assert Array.map<Merchant, Text>(activeMerchants, func m = m.name) == ["Alpha", "Gamma"];
@@ -71,13 +72,13 @@ test("Example", func () {
 
   // Inspect key ordering for the active status bucket.
   let descendingKeys = switch (Store.keysByOrder<Text, Merchant>(store, "index_status", "active", #descending)) {
-    case (#ok keys) keys;
+    case (#ok iter) Iter.toArray(iter);
     case (#err _) [];
   };
   assert descendingKeys == ["acct-3", "acct-1"];
 
   let ascendingKeys = switch (Store.keysByOrder<Text, Merchant>(store, "index_status", "active", #ascending)) {
-    case (#ok keys) keys;
+    case (#ok iter) Iter.toArray(iter);
     case (#err _) [];
   };
   assert ascendingKeys == ["acct-1", "acct-3"];
@@ -122,7 +123,7 @@ test("Example", func () {
     func (_, acc) = acc.balance,
     Nat.compare
   )) {
-    case (#ok keys) keys;
+    case (#ok iter) Iter.toArray(iter);
     case (#err _) [];
   };
   assert byBalanceDescending == ["acct-high", "acct-mid", "acct-low"];
@@ -139,7 +140,7 @@ test("Example", func () {
     func (_, acc) = acc.balance,
     Nat.compare
   )) {
-    case (#ok keys) keys;
+    case (#ok iter) Iter.toArray(iter);
     case (#err _) [];
   };
   assert byBalanceAscendingPage == ["acct-low", "acct-mid"];

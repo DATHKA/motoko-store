@@ -308,17 +308,11 @@ module {
     Array.tabulate<T>(length, func i = items[offset + i]);
   };
 
-  /// Returns a new array with items in reverse order.
-  func reverseArray<T>(items : [T]) : [T] {
-    let size = items.size();
-    Array.tabulate<T>(size, func i = items[size - 1 - i]);
-  };
-
   /// Applies the requested sort order to an array of items.
   func applySortOrder<T>(items : [T], order : SortOrder) : [T] {
     switch (order) {
       case (#ascending) { items };
-      case (#descending) { reverseArray(items) };
+      case (#descending) { Array.reverse(items) };
     }
   };
 
@@ -340,10 +334,10 @@ module {
 
   /// Returns true when record `k` exists.
   /// ```motoko
-  /// let present = Store.exists(store, Text.compare, "acct-1");
+  /// let present = Store.containsKey(store, Text.compare, "acct-1");
   /// // present == true when the key has been added
   /// ```
-  public func exists<K, V>(store : Store<K, V>, compareKey : Compare<K>, k : K) : Bool {
+  public func containsKey<K, V>(store : Store<K, V>, compareKey : Compare<K>, k : K) : Bool {
     Map.containsKey(store.records, compareKey, k);
   };
 
@@ -390,7 +384,7 @@ module {
   /// // added == #ok(()) and the record now exists in `store.records`
   /// ```
   public func add<K, V>(store : Store<K, V>, compareKey : Compare<K>, k : K, v : V, pairs : ?[(IndexName, Text)]) : Result.Result<(), StoreError> {
-    if (exists(store, compareKey, k)) {
+    if (containsKey(store, compareKey, k)) {
       return #err(#keyExists);
     };
     let normalized = switch (requireIndexPairs(store, pairs)) {
@@ -502,6 +496,21 @@ module {
     #ok(updated);
   };
 
+  /// Replaces the value stored under `k` and optionally reindexes the key.
+  /// ```motoko
+  /// let replaced = Store.replace(store, Text.compare, "acct-2", newRecord, ?[("index_status", "active")]);
+  /// // replaced == #ok(newRecord) when the key exists
+  /// ```
+  public func replace<K, V>(
+    store : Store<K, V>,
+    compareKey : Compare<K>,
+    k : K,
+    value : V,
+    pairs : ?[(IndexName, Text)]
+  ) : Result.Result<V, StoreError> {
+    update(store, compareKey, k, func (_current : V) : V { value }, pairs);
+  };
+
   /// Renames a record key while keeping indexes consistent.
   /// ```motoko
   /// let renamed = Store.renameKey(store, Text.compare, "acct-1", "acct-1a", record, null);
@@ -546,7 +555,7 @@ module {
   /// let removed = Store.remove(store, Text.compare, "acct-1");
   /// // removed == #ok(oldValue) and the key disappears from all indexes
   /// ```
-  public func remove<K, V>(store : Store<K, V>, compareKey : Compare<K>, k : K) : Result.Result<V, StoreError> {
+  public func delete<K, V>(store : Store<K, V>, compareKey : Compare<K>, k : K) : Result.Result<V, StoreError> {
     let existing = Map.get(store.records, compareKey, k);
     switch (existing) {
       case null { #err(#notFound) };
@@ -556,6 +565,15 @@ module {
         #ok(value)
       };
     };
+  };
+
+  /// Removes a record and its index references.
+  /// ```motoko
+  /// Store.remove(store, Text.compare, "acct-1");
+  /// ```
+  public func remove<K, V>(store : Store<K, V>, compareKey : Compare<K>, k : K) {
+    Map.remove(store.records, compareKey, k);
+    removeKeyFromAllIndexes(store, compareKey, k);
   };
 
   /// Retrieves a record by key.
@@ -585,55 +603,84 @@ module {
     Map.values(store.records);
   };
 
-  /// Returns keys found under a specific index value. The array mirrors the contents of the
+  /// Returns keys found under a specific index value. The iterator mirrors the contents of the
   /// key set at the time of the call.
   /// ```motoko
-  /// let keys = Store.keysBy(store, "index_status", "active");
-  /// // keys == #ok([...]) containing all matching account identifiers
+  /// let keysIter = Store.keysBy(store, "index_status", "active");
+  /// // Iter.toArray(keysIter) contains all matching account identifiers
   /// ```
-  public func keysBy<K, V>(store : Store<K, V>, indexName : IndexName, indexValue : Text) : Result.Result<[K], StoreError> {
+  public func keysBy<K, V>(store : Store<K, V>, indexName : IndexName, indexValue : Text) : Result.Result<Iter.Iter<K>, StoreError> {
     let idx = switch (Map.get(store.index, Text.compare, indexName)) {
       case null { return #err(#invalidIndex) };
       case (?value) { value };
     };
     switch (Map.get(idx.keySet, Text.compare, indexValue)) {
-      case null { #ok(Array.empty<K>()) };
-      case (?set) { #ok(Iter.toArray(Set.values(set))) };
+      case null { #ok(Iter.fromArray(Array.empty<K>())) };
+      case (?set) { #ok(Set.values(set)) };
     };
   };
 
   /// Returns keys for an index value ordered according to `order`.
   /// ```motoko
-  /// let keys = Store.keysByOrder(store, "index_status", "active", #descending);
-  /// // keys == #ok(["acct-3", "acct-1"])
+  /// let keysIter = Store.keysByOrder(store, "index_status", "active", #descending);
+  /// // Iter.toArray(keysIter) == ["acct-3", "acct-1"]
   /// ```
-  public func keysByOrder<K, V>(store : Store<K, V>, indexName : IndexName, indexValue : Text, order : SortOrder) : Result.Result<[K], StoreError> {
+  public func keysByOrder<K, V>(store : Store<K, V>, indexName : IndexName, indexValue : Text, order : SortOrder) : Result.Result<Iter.Iter<K>, StoreError> {
     switch (keysBy(store, indexName, indexValue)) {
       case (#err e) { #err e };
-      case (#ok keysAtIndex) { #ok(applySortOrder(keysAtIndex, order)) };
+      case (#ok keysAtIndex) {
+        let ordered = applySortOrder(Iter.toArray(keysAtIndex), order);
+        #ok(Iter.fromArray(ordered))
+      };
     }
   };
 
   /// Returns values found under a specific index value. The helper rehydrates each key and
   /// reports `#err(#notFound)` if a key set contains stale keys.
   /// ```motoko
-  /// let vals = Store.valuesBy(store, Text.compare, "index_status", "active");
-  /// // vals == #ok([...]) and stale key sets trigger #err(#notFound)
+  /// let valsIter = Store.valuesBy(store, Text.compare, "index_status", "active");
+  /// // Iter.toArray(valsIter) lists the associated values
   /// ```
-  public func valuesBy<K, V>(store : Store<K, V>, compareKey : Compare<K>, indexName : IndexName, indexValue : Text) : Result.Result<[V], StoreError> {
+  public func valuesBy<K, V>(store : Store<K, V>, compareKey : Compare<K>, indexName : IndexName, indexValue : Text) : Result.Result<Iter.Iter<V>, StoreError> {
     switch (keysBy(store, indexName, indexValue)) {
       case (#err e) { #err e };
       case (#ok keysAtIndex) {
         let collected = List.empty<V>();
-        for (key in keysAtIndex.vals()) {
+        for (key in Iter.toArray(keysAtIndex).vals()) {
           switch (Map.get(store.records, compareKey, key)) {
             case null { return #err(#notFound) };
             case (?value) { List.add(collected, value) };
           };
         };
-        #ok(List.toArray(collected))
+        #ok(List.values(collected));
       };
     };
+  };
+
+  /// Returns `(key, value)` pairs for a specific index value.
+  /// ```motoko
+  /// let entryIter = Store.entriesBy(store, Text.compare, "index_status", "active");
+  /// // Iter.toArray(entryIter) might yield [("acct-1", record1), ...]
+  /// ```
+  public func entriesBy<K, V>(
+    store : Store<K, V>,
+    compareKey : Compare<K>,
+    indexName : IndexName,
+    indexValue : Text
+  ) : Result.Result<Iter.Iter<(K, V)>, StoreError> {
+    switch (keysBy(store, indexName, indexValue)) {
+      case (#err e) { #err e };
+      case (#ok keysAtIndex) {
+        let collected = List.empty<(K, V)>();
+        for (key in Iter.toArray(keysAtIndex).vals()) {
+          switch (Map.get(store.records, compareKey, key)) {
+            case null { return #err(#notFound) };
+            case (?value) { List.add(collected, (key, value)) };
+          };
+        };
+        #ok(List.values(collected));
+      };
+    }
   };
 
   /// Counts the number of keys present for an index value.
@@ -674,12 +721,12 @@ module {
     };
   };
 
-  /// Returns a slice of keys for an index value using zero-based pagination.
+  /// Returns a paginated iterator of keys for an index value using zero-based pagination.
   /// `offset` skips the given number of matches, `limit` caps how many keys are returned.
-  /// Supplying `offset >= size` naturally produces an empty array.
+  /// Supplying `offset >= size` naturally produces an empty iterator.
   /// ```motoko
-  /// let page = Store.pageKeysBy(store, "index_status", "active", 0, 2);
-  /// // page == #ok(["acct-1", "acct-3"]) skipping 0 keys and returning at most 2
+  /// let pageIter = Store.pageKeysBy(store, "index_status", "active", 0, 2);
+  /// // Iter.toArray(pageIter) == ["acct-1", "acct-3"]
   /// ```
   public func pageKeysBy<K, V>(
     store : Store<K, V>,
@@ -687,17 +734,19 @@ module {
     indexValue : Text,
     offset : Nat,
     limit : Nat
-  ) : Result.Result<[K], StoreError> {
+  ) : Result.Result<Iter.Iter<K>, StoreError> {
     switch (keysBy(store, indexName, indexValue)) {
       case (#err e) { #err e };
-      case (#ok keysAtIndex) { #ok(paginateArray(keysAtIndex, offset, limit)) };
+      case (#ok keysAtIndex) {
+        #ok(Iter.fromArray(paginateArray(Iter.toArray(keysAtIndex), offset, limit)))
+      };
     };
   };
 
-  /// Returns a slice of keys for an index value after applying the desired order.
+  /// Returns a paginated iterator of keys for an index value after applying the desired order.
   /// ```motoko
-  /// let page = Store.pageKeysByOrder(store, "index_status", "active", #descending, 0, 2);
-  /// // page == #ok(["acct-3", "acct-1"])
+  /// let pageIter = Store.pageKeysByOrder(store, "index_status", "active", #descending, 0, 2);
+  /// // Iter.toArray(pageIter) == ["acct-3", "acct-1"]
   /// ```
   public func pageKeysByOrder<K, V>(
     store : Store<K, V>,
@@ -706,19 +755,21 @@ module {
     order : SortOrder,
     offset : Nat,
     limit : Nat
-  ) : Result.Result<[K], StoreError> {
+  ) : Result.Result<Iter.Iter<K>, StoreError> {
     switch (keysByOrder(store, indexName, indexValue, order)) {
       case (#err e) { #err e };
-      case (#ok orderedKeys) { #ok(paginateArray(orderedKeys, offset, limit)) };
+      case (#ok orderedKeys) {
+        #ok(Iter.fromArray(paginateArray(Iter.toArray(orderedKeys), offset, limit)))
+      };
     };
   };
 
-  /// Returns a slice of values for an index value using zero-based pagination.
+  /// Returns a paginated iterator of values for an index value using zero-based pagination.
   /// `offset` skips the given number of matches, `limit` caps how many values are returned.
   /// The helper aborts with `#err(#notFound)` if any key-set entry fails to resolve.
   /// ```motoko
-  /// let page = Store.pageBy(store, Text.compare, "index_status", "active", 0, 1);
-  /// // page == #ok([value]) after skipping 0 keys and returning at most 1
+  /// let pageIter = Store.pageBy(store, Text.compare, "index_status", "active", 0, 1);
+  /// // Iter.toArray(pageIter) contains at most one value
   /// ```
   public func pageBy<K, V>(
     store : Store<K, V>,
@@ -727,18 +778,18 @@ module {
     indexValue : Text,
     offset : Nat,
     limit : Nat
-  ) : Result.Result<[V], StoreError> {
+  ) : Result.Result<Iter.Iter<V>, StoreError> {
     switch (pageKeysBy(store, indexName, indexValue, offset, limit)) {
       case (#err e) { #err e };
-      case (#ok keysAtIndex) {
+      case (#ok keysIter) {
         let collected = List.empty<V>();
-        for (key in keysAtIndex.vals()) {
+        for (key in Iter.toArray(keysIter).vals()) {
           switch (Map.get(store.records, compareKey, key)) {
             case null { return #err(#notFound) };
             case (?value) { List.add(collected, value) };
           };
         };
-        #ok(List.toArray(collected))
+        #ok(Iter.fromArray(List.toArray(collected)))
       };
     };
   };
@@ -776,7 +827,7 @@ module {
   /// Returns keys underneath an index sorted by a projection of their values.
   /// Ties fall back to the key comparator.
   /// ```motoko
-  /// let sorted = Store.keysByValue(store, Text.compare, "index_status", "active", #ascending, func (_, acc) = acc.balance, Nat.compare);
+  /// let sortedIter = Store.keysByValue(store, Text.compare, "index_status", "active", #ascending, func (_, acc) = acc.balance, Nat.compare);
   /// ```
   public func keysByValue<K, V, A>(
     store : Store<K, V>,
@@ -786,18 +837,21 @@ module {
     order : SortOrder,
     projector : (K, V) -> A,
     compareProjection : Compare<A>
-  ) : Result.Result<[K], StoreError> {
+  ) : Result.Result<Iter.Iter<K>, StoreError> {
     switch (keysBy(store, indexName, indexValue)) {
       case (#err e) { #err e };
       case (#ok keysAtIndex) {
-        sortKeysByProjection(store, compareKey, keysAtIndex, order, projector, compareProjection)
+        switch (sortKeysByProjection(store, compareKey, Iter.toArray(keysAtIndex), order, projector, compareProjection)) {
+          case (#err e) { #err e };
+          case (#ok sorted) { #ok(Iter.fromArray(sorted)) };
+        }
       };
     }
   };
 
-  /// Returns a paginated slice of keys sorted by a projection of their values.
+  /// Returns a paginated iterator of keys sorted by a projection of their values.
   /// ```motoko
-  /// let page = Store.pageKeysByValue(store, Text.compare, "index_status", "active", #descending, 0, 2, func (_, acc) = acc.balance, Nat.compare);
+  /// let pageIter = Store.pageKeysByValue(store, Text.compare, "index_status", "active", #descending, 0, 2, func (_, acc) = acc.balance, Nat.compare);
   /// ```
   public func pageKeysByValue<K, V, A>(
     store : Store<K, V>,
@@ -809,10 +863,68 @@ module {
     limit : Nat,
     projector : (K, V) -> A,
     compareProjection : Compare<A>
-  ) : Result.Result<[K], StoreError> {
+  ) : Result.Result<Iter.Iter<K>, StoreError> {
     switch (keysByValue(store, compareKey, indexName, indexValue, order, projector, compareProjection)) {
       case (#err e) { #err e };
-      case (#ok orderedKeys) { #ok(paginateArray(orderedKeys, offset, limit)) };
+      case (#ok orderedKeys) {
+        #ok(Iter.fromArray(paginateArray(Iter.toArray(orderedKeys), offset, limit)))
+      }
+    }
+  };
+
+  /// Returns values for an index value ordered with a custom projection.
+  /// ```motoko
+  /// let valuesIter = Store.valuesByOrder(
+  ///   store,
+  ///   Text.compare,
+  ///   "index_status",
+  ///   "active",
+  ///   #descending,
+  ///   func v = v.balance,
+  ///   Nat.compare
+  /// );
+  /// ```
+  public func valuesByOrder<K, V, A>(
+    store : Store<K, V>,
+    compareKey : Compare<K>,
+    indexName : IndexName,
+    indexValue : Text,
+    order : SortOrder,
+    projector : V -> A,
+    compareProjection : Compare<A>
+  ) : Result.Result<Iter.Iter<V>, StoreError> {
+    switch (keysByValue(store, compareKey, indexName, indexValue, order, func (_key : K, value : V) : A { projector(value) }, compareProjection)) {
+      case (#err e) { #err e };
+      case (#ok keyIter) {
+        let collected = List.empty<V>();
+        for (key in Iter.toArray(keyIter).vals()) {
+          switch (Map.get(store.records, compareKey, key)) {
+            case null { return #err(#notFound) };
+            case (?value) { List.add(collected, value) };
+          };
+        };
+        #ok(Iter.fromArray(List.toArray(collected)))
+      };
+    }
+  };
+
+  /// Returns a paginated iterator of values ordered by a projection.
+  public func pageValuesByOrder<K, V, A>(
+    store : Store<K, V>,
+    compareKey : Compare<K>,
+    indexName : IndexName,
+    indexValue : Text,
+    order : SortOrder,
+    offset : Nat,
+    limit : Nat,
+    projector : V -> A,
+    compareProjection : Compare<A>
+  ) : Result.Result<Iter.Iter<V>, StoreError> {
+    switch (valuesByOrder(store, compareKey, indexName, indexValue, order, projector, compareProjection)) {
+      case (#err e) { #err e };
+      case (#ok valuesIter) {
+        #ok(Iter.fromArray(paginateArray(Iter.toArray(valuesIter), offset, limit)))
+      };
     }
   };
 
@@ -885,6 +997,26 @@ module {
     switch (Map.get(store.index, Text.compare, name)) {
       case null { #err(#invalidIndex) };
       case (?idx) { #ok(Map.size(idx.keySet)) };
+    }
+  };
+
+  /// Returns the number of keys stored under `indexValue` inside `indexName`.
+  /// ```motoko
+  /// let total = Store.indexSizeBy(store, "index_status", "active");
+  /// // total == #ok(2) when two keys are indexed as active
+  /// ```
+  public func indexSizeBy<K, V>(
+    store : Store<K, V>,
+    name : IndexName,
+    indexValue : Text
+  ) : Result.Result<Nat, StoreError> {
+    let idx = switch (Map.get(store.index, Text.compare, name)) {
+      case null { return #err(#invalidIndex) };
+      case (?value) { value };
+    };
+    switch (Map.get(idx.keySet, Text.compare, indexValue)) {
+      case null { #ok(0) };
+      case (?set) { #ok(Set.size(set)) };
     }
   };
 
@@ -1010,12 +1142,12 @@ module {
     };
   };
 
-  /// Returns all values that satisfy the predicate `(key, value) -> Bool`.
+  /// Returns an iterator for values that satisfy the predicate `(key, value) -> Bool`.
   /// ```motoko
-  /// let actives = Store.filter(store, func (_, v) = v.status == "active");
-  /// // actives == [value1, value2] for matching records
+  /// let activesIter = Store.filter(store, func (_, v) = v.status == "active");
+  /// // Iter.toArray(activesIter) yields all matching records
   /// ```
-  public func filter<K, V>(store : Store<K, V>, pred : (K, V) -> Bool) : [V] {
+  public func filter<K, V>(store : Store<K, V>, pred : (K, V) -> Bool) : Iter.Iter<V> {
     let acc = List.empty<V>();
     for (entry in Map.entries(store.records)) {
       let (key, value) = entry;
@@ -1023,7 +1155,7 @@ module {
         List.add(acc, value);
       };
     };
-    List.toArray(acc);
+    List.values(acc);
   };
 
   /// Returns the first value that satisfies the predicate `(key, value) -> Bool`.
@@ -1058,12 +1190,12 @@ module {
   /// let names = Store.mapValues<Text, StoreRecord, Text>(store, func (_, v) = v.name);
   /// // names == ["Alpha", ...] representing derived projections
   /// ```
-  public func mapValues<K, V, A>(store : Store<K, V>, f : (K, V) -> A) : [A] {
+  public func mapValues<K, V, A>(store : Store<K, V>, f : (K, V) -> A) : Iter.Iter<A> {
     let acc = List.empty<A>();
     for (entry in Map.entries(store.records)) {
       let (key, value) = entry;
       List.add(acc, f(key, value));
     };
-    List.toArray(acc);
+    List.values(acc);
   };
 };

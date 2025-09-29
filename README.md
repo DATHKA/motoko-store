@@ -31,6 +31,7 @@ import Store "mo:store";
 import Text "mo:core/Text";
 import Array "mo:core/Array";
 import Nat "mo:core/Nat";
+import Iter "mo:core/Iter";
 import Debug "mo:core/Debug";
 
 type Merchant = {
@@ -81,7 +82,7 @@ func main() : async () {
 
   // Pull all active merchants via the index.
   let activeMerchants = switch (Store.valuesBy<Text, Merchant>(store, Text.compare, "index_status", "active")) {
-    case (#ok merchants) merchants;
+    case (#ok iter) Iter.toArray(iter);
     case (#err _) [];
   };
 
@@ -93,12 +94,12 @@ func main() : async () {
 
   // Inspect key ordering for the active status bucket.
   let descendingKeys = switch (Store.keysByOrder<Text, Merchant>(store, "index_status", "active", #descending)) {
-    case (#ok keys) keys;
+    case (#ok iter) Iter.toArray(iter);
     case (#err _) [];
   };
 
   let ascendingKeys = switch (Store.keysByOrder<Text, Merchant>(store, "index_status", "active", #ascending)) {
-    case (#ok keys) keys;
+    case (#ok iter) Iter.toArray(iter);
     case (#err _) [];
   };
 
@@ -142,7 +143,7 @@ func main() : async () {
     func (_, acc) = acc.balance,
     Nat.compare
   )) {
-    case (#ok keys) keys;
+    case (#ok iter) Iter.toArray(iter);
     case (#err _) [];
   };
 
@@ -158,7 +159,7 @@ func main() : async () {
     func (_, acc) = acc.balance,
     Nat.compare
   )) {
-    case (#ok keys) keys;
+    case (#ok iter) Iter.toArray(iter);
     case (#err _) [];
   };
 
