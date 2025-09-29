@@ -1,8 +1,6 @@
 import { test } "mo:test";
 import Store "../src/";
 import Text "mo:core/Text";
-import Nat "mo:core/Nat";
-import Iter "mo:core/Iter";
 
 type StoreRecord = {
   name : Text;

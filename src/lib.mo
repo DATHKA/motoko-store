@@ -332,6 +332,24 @@ module {
     store;
   };
 
+  /// Creates a store with pre-populated records and no indexes from an existing map.
+  /// ```motoko
+  /// let records = Map.empty<Text, Nat>();
+  /// Map.add(records, Text.compare, "acct-1", 1);
+  /// let store = Store.fromMap<Text, Nat>("inventory", records);
+  /// // Store.size(store) == 1 and Store.indexNames(store) == []
+  /// ```
+  public func fromMap<K, V>(
+    name : Text,
+    records : Map.Map<K, V>
+  ) : Store<K, V> {
+    {
+      name = name;
+      records = records;
+      index = Map.empty<IndexName, Index<K>>();
+    };
+  };
+
   /// Returns true when record `k` exists.
   /// ```motoko
   /// let present = Store.containsKey(store, Text.compare, "acct-1");
@@ -681,22 +699,6 @@ module {
         #ok(List.values(collected));
       };
     }
-  };
-
-  /// Counts the number of keys present for an index value.
-  /// ```motoko
-  /// let total = Store.countBy(store, "index_status", "active");
-  /// // total == #ok(2) meaning two keys live in the set
-  /// ```
-  public func countBy<K, V>(store : Store<K, V>, indexName : IndexName, indexValue : Text) : Result.Result<Nat, StoreError> {
-    let idx = switch (Map.get(store.index, Text.compare, indexName)) {
-      case null { return #err(#invalidIndex) };
-      case (?value) { value };
-    };
-    switch (Map.get(idx.keySet, Text.compare, indexValue)) {
-      case null { #ok(0) };
-      case (?set) { #ok(Set.size(set)) };
-    };
   };
 
   /// Returns the first value under an index value, if present.
@@ -1185,10 +1187,10 @@ module {
     }
   };
 
-  /// Maps every record through `f` and collects the results.
+  /// Maps every record through `f` and returns an iterator with the results.
   /// ```motoko
-  /// let names = Store.mapValues<Text, StoreRecord, Text>(store, func (_, v) = v.name);
-  /// // names == ["Alpha", ...] representing derived projections
+  /// let namesIter = Store.mapValues<Text, StoreRecord, Text>(store, func (_, v) = v.name);
+  /// // Iter.toArray(namesIter) == ["Alpha", ...] representing derived projections
   /// ```
   public func mapValues<K, V, A>(store : Store<K, V>, f : (K, V) -> A) : Iter.Iter<A> {
     let acc = List.empty<A>();
@@ -1197,5 +1199,20 @@ module {
       List.add(acc, f(key, value));
     };
     List.values(acc);
+  };
+
+/// Returns a basic text represention of a `StoreError`.
+/// ```motoko
+/// let errorMessage = Store.errorToText(#keyExists);
+/// // errorMessage == "Key already exists"
+/// ```
+  public func errorToText(err : StoreError) : Text {
+    switch (err) {
+      case (#keyExists) { "Key already exists." };
+      case (#indexMismatch) { "Index mismatch." };
+      case (#invalidIndex) { "Invalid index." };
+      case (#notFound) { "Not found" };
+      case (#indexExists) { "Index exists" };
+    };
   };
 };

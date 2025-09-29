@@ -1,6 +1,6 @@
 [package]
 name = "store"
-version = "0.1.3"
+version = "0.2.1"
 description = "Mutable key-value store with optional secondary indexes."
 repository = "https://github.com/DATHKA/motoko-store"
 keywords = [ "database", "db", "data-structure", "utils"]
