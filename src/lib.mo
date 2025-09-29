@@ -852,6 +852,18 @@ module {
     Iter.toArray(Map.keys(store.index));
   };
 
+  /// Returns `true` when an index with the given name is registered.
+  /// ```motoko
+  /// let present = Store.indexExists(store, "index_status");
+  /// // present == true when the index has been registered
+  /// ```
+  public func indexExists<K, V>(store : Store<K, V>, name : IndexName) : Bool {
+    switch (Map.get(store.index, Text.compare, name)) {
+      case null false;
+      case (?_) true;
+    }
+  };
+
   /// Lists key-set identifiers for a specific index in ascending order.
   /// ```motoko
   /// let keySets = Store.indexKeys(store, "index_status");
@@ -862,6 +874,18 @@ module {
       case null { #err(#invalidIndex) };
       case (?idx) { #ok(Iter.toArray(Map.keys(idx.keySet))) };
     };
+  };
+
+  /// Returns the number of key sets tracked by a named index.
+  /// ```motoko
+  /// let size = Store.indexSize(store, "index_status");
+  /// // size == #ok(2) when two key sets exist
+  /// ```
+  public func indexSize<K, V>(store : Store<K, V>, name : IndexName) : Result.Result<Nat, StoreError> {
+    switch (Map.get(store.index, Text.compare, name)) {
+      case null { #err(#invalidIndex) };
+      case (?idx) { #ok(Map.size(idx.keySet)) };
+    }
   };
 
   /// Updates index membership by replacing old key-set assignments with new ones.

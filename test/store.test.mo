@@ -26,6 +26,9 @@ test("Store core CRUD and indexing", func () {
 
   assert Store.size<Text, StoreRecord>(store) == 0;
   assert not Store.exists<Text, StoreRecord>(store, Text.compare, "acct-1");
+  assert Store.indexExists<Text, StoreRecord>(store, "index_status");
+  assert Store.indexExists<Text, StoreRecord>(store, "index_category");
+  assert not Store.indexExists<Text, StoreRecord>(store, "index_unknown");
 
   switch (Store.add<Text, StoreRecord>(
     store,
@@ -57,6 +60,18 @@ test("Store core CRUD and indexing", func () {
     case (#err _) { assert false; return };
     case (#ok _) {};
   };
+
+  let statusSizeInitial = switch (Store.indexSize<Text, StoreRecord>(store, "index_status")) {
+    case (#ok size) size;
+    case (#err _) { assert false; return };
+  };
+  assert statusSizeInitial == 2;
+
+  let categorySizeInitial = switch (Store.indexSize<Text, StoreRecord>(store, "index_category")) {
+    case (#ok size) size;
+    case (#err _) { assert false; return };
+  };
+  assert categorySizeInitial == 2;
 
   assert Store.size<Text, StoreRecord>(store) == 3;
   assert Store.exists<Text, StoreRecord>(store, Text.compare, "acct-2");
@@ -260,6 +275,10 @@ test("Store core CRUD and indexing", func () {
     case (#ok vals) { vals };
   };
   assert emptyAfterClear.size() == 0;
+  assert switch (Store.indexSize<Text, StoreRecord>(store, "index_category")) {
+    case (#ok size) size == 0;
+    case (#err _) { false };
+  };
 
   Store.clear<Text, StoreRecord>(store);
   assert Store.size<Text, StoreRecord>(store) == 0;
@@ -399,6 +418,12 @@ test("Store handles error cases", func () {
     record("Invalid", "active", "hardware"),
     ?[("unknown", "set"), ("index_status", "active")]
   )) {
+    case (#err (#invalidIndex)) {};
+    case (_) { assert false; return };
+  };
+
+  assert not Store.indexExists<Text, StoreRecord>(store, "index_unknown");
+  switch (Store.indexSize<Text, StoreRecord>(store, "index_unknown")) {
     case (#err (#invalidIndex)) {};
     case (_) { assert false; return };
   };
