@@ -53,6 +53,8 @@ module {
     name : Text;
     records : Map.Map<K, V>;
     index : Map.Map<IndexName, Index<K>>;
+    /// Monotonically increasing counter tracking how many records have ever been inserted.
+    var eventSequence : Nat;
   };
 
   /// Comparator function signature used by store operations to order keys.
@@ -328,6 +330,7 @@ module {
       name = name;
       records = Map.empty<K, V>();
       index = Map.empty<IndexName, Index<K>>();
+      var eventSequence = 0;
     };
     store;
   };
@@ -347,6 +350,7 @@ module {
       name = name;
       records = records;
       index = Map.empty<IndexName, Index<K>>();
+      var eventSequence = Map.size(records);
     };
   };
 
@@ -411,6 +415,7 @@ module {
     };
     Map.add(store.records, compareKey, k, v);
     addKeyToIndexes(store, compareKey, k, normalized);
+    store.eventSequence := store.eventSequence + 1;
     #ok(())
   };
 
@@ -457,7 +462,8 @@ module {
       case (?map) { addKeyToIndexes(store, compareKey, k, map) };
       case null {};
     };
-
+    // Increment the sequenceNumber only if a new insert has been made
+    if (hasExisting == false) store.eventSequence := store.eventSequence + 1;
     #ok(existing);
   };
 
@@ -1199,6 +1205,15 @@ module {
       List.add(acc, f(key, value));
     };
     List.values(acc);
+  };
+
+  /// Returns the event sequence counter representing cumulative record insertions.
+  /// ```motoko
+  /// let seq = Store.getEventSequence(store);
+  /// // seq increases whenever a brand new key is added via `add` or `put`
+  /// ```
+  public func getEventSequence<K, V>(store : Store<K, V>) : Nat {
+    store.eventSequence;
   };
 
 /// Returns a basic text represention of a `StoreError`.

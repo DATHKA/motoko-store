@@ -61,6 +61,7 @@ test("Store constructs from existing map", func () {
     case (?value) value.name == "Alpha";
     case null false;
   };
+  assert Store.getEventSequence<Text, StoreRecord>(store) == 2;
 });
 
 test("Store from map supports indexing", func () {
@@ -87,6 +88,51 @@ test("Store from map supports indexing", func () {
 
   assert activeValues.size() == 1;
   assert activeValues[0].name == "Alpha";
+});
+
+test("Store event sequence counts additions", func () {
+  let store = makeStore();
+
+  assert Store.getEventSequence<Text, StoreRecord>(store) == 0;
+
+  ignore Store.add<Text, StoreRecord>(
+    store,
+    Text.compare,
+    "acct-1",
+    record("Alpha", "active", "hardware"),
+    ?[("index_status", "active"), ("index_category", "hardware")]
+  );
+  assert Store.getEventSequence<Text, StoreRecord>(store) == 1;
+
+  switch (Store.put<Text, StoreRecord>(
+    store,
+    Text.compare,
+    "acct-2",
+    record("Beta", "inactive", "services"),
+    ?[("index_status", "inactive"), ("index_category", "services")]
+  )) {
+    case (#ok _) {};
+    case (#err _) { assert false; return };
+  };
+  assert Store.getEventSequence<Text, StoreRecord>(store) == 2;
+
+  switch (Store.put<Text, StoreRecord>(
+    store,
+    Text.compare,
+    "acct-2",
+    record("Beta", "active", "services"),
+    ?[("index_status", "active"), ("index_category", "services")]
+  )) {
+    case (#ok _) {};
+    case (#err _) { assert false; return };
+  };
+  assert Store.getEventSequence<Text, StoreRecord>(store) == 2;
+
+  switch (Store.delete<Text, StoreRecord>(store, Text.compare, "acct-1")) {
+    case (#ok _) {};
+    case (#err _) { assert false; return };
+  };
+  assert Store.getEventSequence<Text, StoreRecord>(store) == 2;
 });
 
 test("Store add and retrieve", func () {
